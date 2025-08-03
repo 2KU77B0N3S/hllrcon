@@ -7,18 +7,10 @@ from hllrcon.exceptions import HLLCommandError
 
 class RconResponseStatus(IntEnum):
     """Enumeration of RCON response status codes."""
-
-    OK = 200
-    """The request was successful."""
-
-    BAD_REQUEST = 400
-    """The request was invalid."""
-
-    UNAUTHORIZED = 401
-    """Insufficient or invalid authorization."""
-
-    INTERNAL_ERROR = 500
-    """An internal server error occurred."""
+    OK = 200  # The request was successful.
+    BAD_REQUEST = 400  # The request was invalid.
+    UNAUTHORIZED = 401  # Insufficient or invalid authorization.
+    INTERNAL_ERROR = 500  # An internal server error occurred.
 
 
 class RconResponse:
@@ -33,24 +25,7 @@ class RconResponse:
         status_message: str,
         content_body: str,
     ) -> None:
-        """Initializes a new RCON response.
-
-        Parameters
-        ----------
-        request_id : int
-            The ID of the request this response corresponds to.
-        command : str
-            The command that was executed.
-        version : int
-            The version of the command.
-        status_code : RconResponseStatus
-            The status code of the response.
-        status_message : str
-            A message describing the status of the response.
-        content_body : str
-            The body of the response, potentially JSON-deserializable.
-
-        """
+        """Initializes a new RCON response."""
         self.request_id = request_id
         self.name = command
         self.version = version
@@ -60,21 +35,7 @@ class RconResponse:
 
     @property
     def content_dict(self) -> dict[str, Any]:
-        """JSON-deserialize the content body of the response.
-
-        Raises
-        ------
-        json.JSONDecodeError
-            The content body could not be deserialized.
-        TypeError
-            The deserialized content is not a dictionary.
-
-        Returns
-        -------
-        dict[str, Any]
-            The deserialized content body as a dictionary.
-
-        """
+        """JSON-deserialize the content body of the response."""
         parsed_content = json.loads(self.content_body)
         if not isinstance(parsed_content, dict):
             msg = f"Expected JSON content to be a dict, got {type(parsed_content)}"
@@ -87,44 +48,37 @@ class RconResponse:
             content = self.content_dict
         except (json.JSONDecodeError, TypeError):
             content = self.content_body
-
         return f"{self.status_code} {self.name} {content}"
 
     @classmethod
-    def unpack(cls, request_id: int, body_encoded: bytes) -> Self:
-        """Unpacks a RCON response from its bytes representation.
-
-        Parameters
-        ----------
-        request_id : int
-            The ID of the request this response corresponds to.
-        body_encoded : bytes
-            The encoded body of the response, which is expected to be a JSON string.
-
-        Returns
-        -------
-        RconResponse
-            The unpacked RCON response object.
-
-        """
-        body = json.loads(body_encoded)
-        return cls(
-            request_id=request_id,
-            command=str(body["name"]),
-            version=int(body["version"]),
-            status_code=RconResponseStatus(int(body["statusCode"])),
-            status_message=str(body["statusMessage"]),
-            content_body=body["contentBody"],
-        )
+    def unpack(cls, pkt_id: int, body_encoded: bytes, version: int = 2) -> Self:
+        """Unpacks a RCON response from its bytes representation."""
+        if version == 2:
+            body = json.loads(body_encoded.decode('utf-8'))
+            return cls(
+                request_id=pkt_id,
+                command=str(body["name"]),
+                version=int(body["version"]),
+                status_code=RconResponseStatus(int(body["statusCode"])),
+                status_message=str(body["statusMessage"]),
+                content_body=body["contentBody"],
+            )
+        else:
+            content_body = body_encoded.decode('utf-8')
+            status_code = (
+                RconResponseStatus.OK
+                if content_body else RconResponseStatus.INTERNAL_ERROR
+            )
+            return cls(
+                request_id=pkt_id,
+                command="",
+                version=1,
+                status_code=status_code,
+                status_message="OK" if status_code == RconResponseStatus.OK else "Error",
+                content_body=content_body,
+            )
 
     def raise_for_status(self) -> None:
-        """Raises an exception if the response status is not OK.
-
-        Raises
-        ------
-        HLLCommandError
-            The response status code is not `RconResponseStatus.OK`.
-
-        """
+        """Raises an exception if the response status is not OK."""
         if self.status_code != RconResponseStatus.OK:
             raise HLLCommandError(self.status_code, self.status_message)
