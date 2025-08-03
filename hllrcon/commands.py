@@ -25,7 +25,6 @@ ModelT = TypeVar("ModelT", bound=BaseModel)
 
 GameMode = Literal["Warfare", "Offensive", "Skirmish"]
 
-
 def cast_response_to_model(
     model_type: type[ModelT],
 ) -> Callable[
@@ -44,11 +43,10 @@ def cast_response_to_model(
 
     return decorator
 
-
 def cast_response_to_bool(
     status_codes: set[int],
 ) -> Callable[
-    [Callable[P, Coroutine[Any, Any, None]]],
+    [Callable[P, Coroutine[Any, Any, None]],
     Callable[P, Coroutine[Any, Any, bool]],
 ]:
     def decorator(
@@ -67,7 +65,6 @@ def cast_response_to_bool(
         return wrapper
 
     return decorator
-
 
 class RconCommands(ABC):
     @abstractmethod
@@ -95,7 +92,7 @@ class RconCommands(ABC):
 
         """
 
-    async def add_admin(self, player_id: str, admin_group: str, comment: str) -> None:
+    async def add_admin(self, player_id: str, admin_group: str, comment: str, version: int = 2) -> None:
         """Add a player to an admin group.
 
         Groups are defined in the server's configuration file. The group determines
@@ -109,33 +106,41 @@ class RconCommands(ABC):
             The group to add the player to.
         comment : str
             A comment to identify the admin. This is usually the name of the player.
+        version: int = 2
+            The RCON version to use.
 
         """
-        await self.execute(
-            "AddAdmin",
-            2,
-            {"PlayerId": player_id, "AdminGroup": admin_group, "Comment": comment},
-        )
+        if version == 2:
+            await self.execute(
+                "AddAdmin",
+                version,
+                {"PlayerId": player_id, "AdminGroup": admin_group, "Comment": comment},
+            )
+        else:
+            await self.execute("adminadd", version, f"{player_id} {admin_group} {comment}")
 
-    async def remove_admin(self, player_id: str) -> None:
+    async def remove_admin(self, player_id: str, version: int = 2) -> None:
         """Remove a player from their admin group.
 
         Parameters
         ----------
         player_id : str
             The ID of the player to remove as an admin.
+        version: int = 2
+            The RCON version to use.
 
         """
-        await self.execute(
-            "RemoveAdmin",
-            2,
-            {
-                "PlayerId": player_id,
-            },
-        )
+        if version == 2:
+            await self.execute(
+                "RemoveAdmin",
+                version,
+                {"PlayerId": player_id},
+            )
+        else:
+            await self.execute("admindel", version, player_id)
 
     @cast_response_to_model(GetAdminLogResponse)
-    async def get_admin_log(self, seconds_span: int, filter_: str | None = None) -> str:
+    async def get_admin_log(self, seconds_span: int, filter_: str | None = None, version: int = 2) -> str:
         """Retrieve admin logs from the server.
 
         Parameters
@@ -144,22 +149,28 @@ class RconCommands(ABC):
             The number of seconds to look back in the logs.
         filter_ : str | None
             A filter string to apply to the logs, by default None.
+        version: int = 2
+            The RCON version to use.
 
         """
         if seconds_span < 0:
             msg = "seconds_span must be a non-negative integer"
             raise ValueError(msg)
 
-        return await self.execute(
-            "GetAdminLog",
-            2,
-            {
-                "LogBackTrackTime": seconds_span,
-                "Filters": filter_ or "",
-            },
-        )
+        if version == 2:
+            return await self.execute(
+                "GetAdminLog",
+                version,
+                {
+                    "LogBackTrackTime": seconds_span,
+                    "Filters": filter_ or "",
+                },
+            )
+        else:
+            minutes = seconds_span // 60
+            return await self.execute("showlog", version, str(minutes))
 
-    async def change_map(self, map_name: str | layers.Layer) -> None:
+    async def change_map(self, map_name: str | layers.Layer, version: int = 2) -> None:
         """Change the current map to the specified map.
 
         Map changes are not immediate. Instead, a 60 second countdown is started.
@@ -168,18 +179,24 @@ class RconCommands(ABC):
         ----------
         map_name : str | Layer
             The name of the map to change to.
+        version: int = 2
+            The RCON version to use.
 
         """
-        await self.execute(
-            "ChangeMap",
-            2,
-            {
-                "MapName": str(map_name),
-            },
-        )
+        if version == 2:
+            await self.execute(
+                "ChangeMap",
+                version,
+                {
+                    "MapName": str(map_name),
+                },
+            )
+        else:
+            await self.execute("map", version, str(map_name))
 
     async def get_available_sector_names(
         self,
+        version: int = 2
     ) -> tuple[list[str], list[str], list[str], list[str], list[str]]:
         """Retrieve a list of all sector names available on the current map.
 
@@ -189,20 +206,23 @@ class RconCommands(ABC):
             A list of sector names available on the current map.
 
         """
-        details = await self.get_command_details("SetSectorLayout")
-        parameters = details.dialogue_parameters
-        if not parameters or not all(
-            p.id.startswith("Sector_") for p in parameters[:5]
-        ):
-            msg = "Received unexpected response from server."
-            raise HLLMessageError(msg)
-        return (
-            parameters[0].value_member.split(","),
-            parameters[1].value_member.split(","),
-            parameters[2].value_member.split(","),
-            parameters[3].value_member.split(","),
-            parameters[4].value_member.split(","),
-        )
+        if version == 2:
+            details = await self.get_command_details("SetSectorLayout", version=version)
+            parameters = details.dialogue_parameters
+            if not parameters or not all(
+                p.id.startswith("Sector_") for p in parameters[:5]
+            ):
+                msg = "Received unexpected response from server."
+                raise HLLMessageError(msg)
+            return (
+                parameters[0].value_member.split(","),
+                parameters[1].value_member.split(","),
+                parameters[2].value_member.split(","),
+                parameters[3].value_member.split(","),
+                parameters[4].value_member.split(","),
+            )
+        else:
+            raise NotImplementedError("v1 not supported for this method")
 
     async def set_sector_layout(
         self,
@@ -211,6 +231,7 @@ class RconCommands(ABC):
         sector3: str,
         sector4: str,
         sector5: str,
+        version: int = 2
     ) -> None:
         """Immediately restart the map with the given sector layout.
 
@@ -221,29 +242,35 @@ class RconCommands(ABC):
         sector2 : str
             The name of the second sector.
         sector3 : str
-            The name of the third sector.
+            The third sector.
         sector4 : str
-            The name of the fourth sector.
+            The fourth sector.
         sector5 : str
-            The name of the fifth sector.
+            The fifth sector.
+        version: int = 2
+            The RCON version to use.
 
         """
-        await self.execute(
-            "SetSectorLayout",
-            2,
-            {
-                "Sector_1": sector1,
-                "Sector_2": sector2,
-                "Sector_3": sector3,
-                "Sector_4": sector4,
-                "Sector_5": sector5,
-            },
-        )
+        if version == 2:
+            await self.execute(
+                "SetSectorLayout",
+                version,
+                {
+                    "Sector_1": sector1,
+                    "Sector_2": sector2,
+                    "Sector_3": sector3,
+                    "Sector_4": sector4,
+                    "Sector_5": sector5,
+                },
+            )
+        else:
+            raise NotImplementedError("v1 not supported for this method")
 
     async def add_map_to_rotation(
         self,
         map_name: str | layers.Layer,
         index: int,
+        version: int = 2
     ) -> None:
         """Add a map to the map rotation.
 
@@ -253,38 +280,49 @@ class RconCommands(ABC):
             The name of the map to add.
         index : int
             The index in the rotation to add the map at.
+        version: int = 2
+            The RCON version to use.
 
         """
-        await self.execute(
-            "AddMapToRotation",
-            2,
-            {
-                "MapName": str(map_name),
-                "Index": index,
-            },
-        )
+        if version == 2:
+            await self.execute(
+                "AddMapToRotation",
+                version,
+                {
+                    "MapName": str(map_name),
+                    "Index": index,
+                },
+            )
+        else:
+            raise NotImplementedError("v1 not supported for this method")
 
-    async def remove_map_from_rotation(self, index: int) -> None:
+    async def remove_map_from_rotation(self, index: int, version: int = 2) -> None:
         """Remove a map from the map rotation.
 
         Parameters
         ----------
         index : int
             The index of the map to remove from the rotation.
+        version: int = 2
+            The RCON version to use.
 
         """
-        await self.execute(
-            "RemoveMapFromRotation",
-            2,
-            {
-                "Index": index,
-            },
-        )
+        if version == 2:
+            await self.execute(
+                "RemoveMapFromRotation",
+                version,
+                {
+                    "Index": index,
+                },
+            )
+        else:
+            raise NotImplementedError("v1 not supported for this method")
 
     async def add_map_to_sequence(
         self,
         map_name: str | layers.Layer,
         index: int,
+        version: int = 2
     ) -> None:
         """Add a map to the map sequence.
 
@@ -294,52 +332,67 @@ class RconCommands(ABC):
             The name of the map to add.
         index : int
             The index in the sequence to add the map at.
+        version: int = 2
+            The RCON version to use.
 
         """
-        await self.execute(
-            "AddMapToSequence",
-            2,
-            {
-                "MapName": str(map_name),
-                "Index": index,
-            },
-        )
+        if version == 2:
+            await self.execute(
+                "AddMapToSequence",
+                version,
+                {
+                    "MapName": str(map_name),
+                    "Index": index,
+                },
+            )
+        else:
+            raise NotImplementedError("v1 not supported for this method")
 
-    async def remove_map_from_sequence(self, index: int) -> None:
+    async def remove_map_from_sequence(self, index: int, version: int = 2) -> None:
         """Remove a map from the map sequence.
 
         Parameters
         ----------
         index : int
             The index of the map to remove from the sequence.
+        version: int = 2
+            The RCON version to use.
 
         """
-        await self.execute(
-            "RemoveMapFromSequence",
-            2,
-            {
-                "Index": index,
-            },
-        )
+        if version == 2:
+            await self.execute(
+                "RemoveMapFromSequence",
+                version,
+                {
+                    "Index": index,
+                },
+            )
+        else:
+            raise NotImplementedError("v1 not supported for this method")
 
-    async def set_map_shuffle_enabled(self, *, enabled: bool) -> None:
+    async def set_map_shuffle_enabled(self, *, enabled: bool, version: int = 2) -> None:
         """Enable or disable map shuffling of the map sequence.
 
         Parameters
         ----------
         enabled : bool
             Whether to enable or disable map shuffling.
+        version: int = 2
+            The RCON version to use.
 
         """
-        await self.execute(
-            "SetShuffleMapSequence",
-            2,
-            {
-                "Enable": enabled,
-            },
-        )
+        if version == 2:
+            await self.execute(
+                "ShuffleMapSequence",
+                version,
+                {
+                    "Enable": enabled,
+                },
+            )
+        else:
+            raise NotImplementedError("v1 not supported for this method")
 
-    async def move_map_in_sequence(self, old_index: int, new_index: int) -> None:
+    async def move_map_in_sequence(self, old_index: int, new_index: int, version: int = 2) -> None:
         """Move a map in the map sequence.
 
         Parameters
@@ -348,18 +401,23 @@ class RconCommands(ABC):
             The current index of the map in the sequence.
         new_index : int
             The new index to move the map to in the sequence.
+        version: int = 2
+            The RCON version to use.
 
         """
-        await self.execute(
-            "MoveMapInSequence",
-            2,
-            {
-                "CurrentIndex": old_index,
-                "NewIndex": new_index,
-            },
-        )
+        if version == 2:
+            await self.execute(
+                "MoveMapInSequence",
+                version,
+                {
+                    "CurrentIndex": old_index,
+                    "NewIndex": new_index,
+                },
+            )
+        else:
+            raise NotImplementedError("v1 not supported for this method")
 
-    async def get_available_maps(self) -> list[str]:
+    async def get_available_maps(self, version: int = 2) -> list[str]:
         """Retrieve a list of all maps available on the server.
 
         Returns
@@ -368,15 +426,20 @@ class RconCommands(ABC):
             A list of map names available on the server.
 
         """
-        details = await self.get_command_details("AddMapToRotation")
-        parameters = details.dialogue_parameters
-        if not parameters or parameters[0].id != "MapName":
-            msg = "Received unexpected response from server."
-            raise HLLMessageError(msg)
-        return parameters[0].value_member.split(",")
+        if version == 2:
+            details = await self.get_command_details("AddMapToRotation", version=version)
+            parameters = details.dialogue_parameters
+            if not parameters or parameters[0].id != "MapName":
+                msg = "Received unexpected response from server."
+                raise HLLMessageError(msg)
+            return parameters[0].value_member.split(",")
+        else:
+            resp = await self.execute("get maps", version)
+            # Parse v1 response (assume comma separated or lines)
+            return [m.strip() for m in resp.split('\n') if m.strip()]
 
     @cast_response_to_model(GetCommandsResponse)
-    async def get_commands(self) -> str:
+    async def get_commands(self, version: int = 2) -> str:
         """Retrieve a description of all the commands available on the server.
 
         Returns
@@ -385,9 +448,12 @@ class RconCommands(ABC):
             A response containing a list of all commands available on the server.
 
         """
-        return await self.execute("GetDisplayableCommands", 2)
+        if version == 2:
+            return await self.execute("GetDisplayableCommands", version)
+        else:
+            raise NotImplementedError("v1 not supported for this method")
 
-    async def set_team_switch_cooldown(self, minutes: int) -> None:
+    async def set_team_switch_cooldown(self, minutes: int, version: int = 2) -> None:
         """Set the cooldown for switching teams.
 
         Parameters
@@ -396,15 +462,18 @@ class RconCommands(ABC):
             The number of minutes to set the cooldown to. Set to 0 for no cooldown.
 
         """
-        await self.execute(
-            "SetTeamSwitchCooldown",
-            2,
-            {
-                "TeamSwitchTimer": minutes,
-            },
-        )
+        if version == 2:
+            await self.execute(
+                "SetTeamSwitchCooldown",
+                version,
+                {
+                    "TeamSwitchTimer": minutes,
+                },
+            )
+        else:
+            await self.execute("setteamswitchcooldown", version, str(minutes))
 
-    async def set_max_queued_players(self, num: int) -> None:
+    async def set_max_queued_players(self, num: int, version: int = 2) -> None:
         """Set the maximum number of players that can be queued for the server.
 
         Parameters
@@ -413,16 +482,19 @@ class RconCommands(ABC):
             The maximum number of players that can be queued. Must be between 0 and 6.
 
         """
-        await self.execute(
-            "SetMaxQueuedPlayers",
-            2,
-            {
-                "MaxQueuedPlayers": num,
-            },
-        )
+        if version == 2:
+            await self.execute(
+                "SetMaxQueuedPlayers",
+                version,
+                {
+                    "MaxQueuedPlayers": num,
+                },
+            )
+        else:
+            await self.execute("setmaxqueuedplayers", version, str(num))
 
-    async def set_idle_kick_duration(self, minutes: int) -> None:
-        """Set the number of minutes a player can be idle for before being kicked.
+    async def set_idle_kick_duration(self, minutes: int, version: int = 2) -> None:
+        """Set the duration for kicking players for idling.
 
         Parameters
         ----------
@@ -431,15 +503,18 @@ class RconCommands(ABC):
             Set to 0 to disable.
 
         """
-        await self.execute(
-            "SetIdleKickDuration",
-            2,
-            {
-                "IdleTimeoutMinutes": minutes,
-            },
-        )
+        if version == 2:
+            await self.execute(
+                "SetIdleKickDuration",
+                version,
+                {
+                    "IdleTimeoutMinutes": minutes,
+                },
+            )
+        else:
+            await self.execute("setkickidletime", version, str(minutes))
 
-    async def set_welcome_message(self, message: str) -> None:
+    async def set_welcome_message(self, message: str, version: int = 2) -> None:
         """Set the welcome message for the server.
 
         The welcome message is displayed to players on the deployment screen and briefly
@@ -451,22 +526,27 @@ class RconCommands(ABC):
             The welcome message to set.
 
         """
-        await self.execute(
-            "SendServerMessage",
-            2,
-            {
-                "Message": message,
-            },
-        )
+        if version == 2:
+            await self.execute(
+                "SendServerMessage",
+                version,
+                {
+                    "Message": message,
+                },
+            )
+        else:
+            raise NotImplementedError("v1 not supported for this method")
 
     @cast_response_to_model(GetPlayerResponse)
-    async def get_player(self, player_id: str) -> str:
+    async def get_player(self, player_id: str, version: int = 2) -> str:
         """Retrieve detailed information about a player currently on the server.
 
         Parameters
         ----------
         player_id : str
             The ID of the player to retrieve information about.
+        version: int = 2
+            The RCON version to use.
 
         Returns
         -------
@@ -474,14 +554,57 @@ class RconCommands(ABC):
             Information about the player.
 
         """
-        return await self.execute(
-            "GetServerInformation",
-            2,
-            {"Name": "player", "Value": player_id},
-        )
+        if version == 2:
+            return await self.execute(
+                "GetServerInformation",
+                version,
+                {"Name": "player", "Value": player_id},
+            )
+        else:
+            resp = await self.execute("playerinfo", version, player_id)
+            # Parse v1 response
+            lines = resp.split('\n')
+            d = {}
+            for line in lines:
+                if ':' in line:
+                    key, value = line.split(':', 1)
+                    d[key.strip()] = value.strip()
+            # Map to GetPlayerResponse fields
+            team_map = {"Axis": 0, "Allies": 1, "None": -1}
+            # Role map (example, add full in data.py)
+            role_map = {"Rifleman": 0, "Assault": 1, # ... add all roles
+            }
+            score = d.get("Score", "0 0 0 0").split()
+            position = d.get("Position", "(0, 0, 0)").strip('() ').split(', ')
+            player_data = {
+                "Name": d.get("Name"),
+                "ClanTag": "",  # v1 may not have
+                "Id": d.get("SteamID"),
+                "Platform": "steam",
+                "EosId": "",
+                "Level": int(d.get("Level", "0")),
+                "Team": team_map.get(d.get("Team", "None"), -1),
+                "Role": role_map.get(d.get("Role", 0), 0),
+                "Platoon": d.get("Unit"),
+                "Kills": int(d.get("Kills", "0")),
+                "Deaths": int(d.get("Deaths", "0")),
+                "ScoreData": {
+                    "Combat": int(score[0] if score else 0),
+                    "Offense": int(score[1] if len(score) >1 else 0),
+                    "Defense": int(score[2] if len(score) >2 else 0),
+                    "Support": int(score[3] if len(score) >3 else 0),
+                },
+                "Loadout": d.get("Loadout"),
+                "WorldPosition": {
+                    "X": float(position[0] if position else 0),
+                    "Y": float(position[1] if len(position) >1 else 0),
+                    "Z": float(position[2] if len(position) >2 else 0),
+                },
+            }
+            return GetPlayerResponse.model_validate_json(json.dumps(player_data))
 
     @cast_response_to_model(GetPlayersResponse)
-    async def get_players(self) -> str:
+    async def get_players(self, version: int = 2) -> str:
         """Retrieve detailed information about all players currently on the server.
 
         This is equivalent to calling `get_player` for each player on the server.
@@ -492,14 +615,28 @@ class RconCommands(ABC):
             Information about all players.
 
         """
-        return await self.execute(
-            "GetServerInformation",
-            2,
-            {"Name": "players", "Value": ""},
-        )
+        if version == 2:
+            return await self.execute(
+                "GetServerInformation",
+                version,
+                {"Name": "players", "Value": ""},
+            )
+        else:
+            resp = await self.execute("get playerids", version)
+            # Parse v1 response
+            players = []
+            for line in resp.split('\n'):
+                if ':' in line:
+                    name, pid = line.split(':', 1)
+                    players.append({
+                        "name": name.strip(),
+                        "iD": pid.strip(),
+                        "platform": "steam"
+                    })
+            return GetPlayersResponse(players=players).model_validate_json(json.dumps({"players": players}))
 
     @cast_response_to_model(GetMapRotationResponse)
-    async def get_map_rotation(self) -> str:
+    async def get_map_rotation(self, version: int = 2) -> str:
         """Retrieve the current map rotation of the server.
 
         Returns
@@ -508,14 +645,17 @@ class RconCommands(ABC):
             The current map rotation of the server.
 
         """
-        return await self.execute(
-            "GetServerInformation",
-            2,
-            {"Name": "maprotation", "Value": ""},
-        )
+        if version == 2:
+            return await self.execute(
+                "GetServerInformation",
+                version,
+                {"Name": "maprotation", "Value": ""},
+            )
+        else:
+            raise NotImplementedError("v1 not supported for this method")
 
     @cast_response_to_model(GetMapRotationResponse)
-    async def get_map_sequence(self) -> str:
+    async def get_map_sequence(self, version: int = 2) -> str:
         """Retrieve the current map sequence of the server.
 
         Returns
@@ -524,15 +664,18 @@ class RconCommands(ABC):
             The current map sequence of the server.
 
         """
-        return await self.execute(
-            "GetServerInformation",
-            2,
-            {"Name": "mapsequence", "Value": ""},
-        )
+        if version == 2:
+            return await self.execute(
+                "GetServerInformation",
+                version,
+                {"Name": "mapsequence", "Value": ""},
+            )
+        else:
+            raise NotImplementedError("v1 not supported for this method")
 
     @cast_response_to_model(GetServerSessionResponse)
-    async def get_server_session(self) -> str:
-        """Retrieve information abou the current server session.
+    async def get_server_session(self, version: int = 2) -> str:
+        """Retrieve information about the current server session.
 
         Returns
         -------
@@ -540,14 +683,17 @@ class RconCommands(ABC):
             Information about the current server session.
 
         """
-        return await self.execute(
-            "GetServerInformation",
-            2,
-            {"Name": "session", "Value": ""},
-        )
+        if version == 2:
+            return await self.execute(
+                "GetServerInformation",
+                version,
+                {"Name": "session", "Value": ""},
+            )
+        else:
+            raise NotImplementedError("v1 not supported for this method")
 
     @cast_response_to_model(GetServerConfigResponse)
-    async def get_server_config(self) -> str:
+    async def get_server_config(self, version: int = 2) -> str:
         """Retrieve the server configuration.
 
         Returns
@@ -556,14 +702,17 @@ class RconCommands(ABC):
             The server configuration.
 
         """
-        return await self.execute(
-            "GetServerInformation",
-            2,
-            {"Name": "serverconfig", "Value": ""},
-        )
+        if version == 2:
+            return await self.execute(
+                "GetServerInformation",
+                version,
+                {"Name": "serverconfig", "Value": ""},
+            )
+        else:
+            raise NotImplementedError("v1 not supported for this method")
 
     @cast_response_to_model(GetBannedWordsResponse)
-    async def get_banned_words(self) -> str:
+    async def get_banned_words(self, version: int = 2) -> str:
         """Retrieve the list of banned words on the server.
 
         Returns
@@ -572,13 +721,16 @@ class RconCommands(ABC):
             The list of banned words on the server.
 
         """
-        return await self.execute(
-            "GetServerInformation",
-            2,
-            {"Name": "bannedwords", "Value": ""},
-        )
+        if version == 2:
+            return await self.execute(
+                "GetServerInformation",
+                version,
+                {"Name": "bannedwords", "Value": ""},
+            )
+        else:
+            raise NotImplementedError("v1 not supported for this method")
 
-    async def broadcast(self, message: str) -> None:
+    async def broadcast(self, message: str, version: int = 2) -> None:
         """Broadcast a message to all players on the server.
 
         Broadcast messages are displayed top-left on the screen for all players.
@@ -589,15 +741,18 @@ class RconCommands(ABC):
             The message to broadcast to all players.
 
         """
-        await self.execute(
-            "ServerBroadcast",
-            2,
-            {
-                "Message": message,
-            },
-        )
+        if version == 2:
+            await self.execute(
+                "ServerBroadcast",
+                version,
+                {
+                    "Message": message,
+                },
+            )
+        else:
+            await self.execute("broadcast", version, message)
 
-    async def set_high_ping_threshold(self, ms: int) -> None:
+    async def set_high_ping_threshold(self, ms: int, version: int = 2) -> None:
         """Set the ping threshold for players.
 
         If a player's ping exceeds this threshold, they will be kicked from the server.
@@ -608,16 +763,19 @@ class RconCommands(ABC):
             The ping threshold in milliseconds. Set to 0 to disable.
 
         """
-        await self.execute(
-            "SetHighPingThreshold",
-            2,
-            {
-                "HighPingThresholdMs": ms,
-            },
-        )
+        if version == 2:
+            await self.execute(
+                "SetHighPingThreshold",
+                version,
+                {
+                    "HighPingThresholdMs": ms,
+                },
+            )
+        else:
+            await self.execute("sethighping", version, str(ms))
 
     @cast_response_to_model(GetCommandDetailsResponse)
-    async def get_command_details(self, command: str) -> str:
+    async def get_command_details(self, command: str, version: int = 2) -> str:
         """Retrieve detailed information about a specific command.
 
         Parameters
@@ -631,9 +789,12 @@ class RconCommands(ABC):
             Information about the command, including its parameters and description.
 
         """
-        return await self.execute("GetClientReferenceData", 2, command)
+        if version == 2:
+            return await self.execute("GetClientReferenceData", version, command)
+        else:
+            raise NotImplementedError("v1 not supported for this method")
 
-    async def message_player(self, player_id: str, message: str) -> None:
+    async def message_player(self, player_id: str, message: str, version: int = 2) -> None:
         """Send a message to a specific player on the server.
 
         The message will be displayed in a box in the top right corner of the player's
@@ -647,17 +808,20 @@ class RconCommands(ABC):
             The message to send to the player.
 
         """
-        await self.execute(
-            "MessagePlayer",
-            2,
-            {
-                "Message": message,
-                "PlayerId": player_id,
-            },
-        )
+        if version == 2:
+            await self.execute(
+                "MessagePlayer",
+                version,
+                {
+                    "Message": message,
+                    "PlayerId": player_id,
+                },
+            )
+        else:
+            raise NotImplementedError("v1 not supported for this method")
 
     @cast_response_to_bool({500})
-    async def kill_player(self, player_id: str, message: str | None = None) -> None:
+    async def kill_player(self, player_id: str, message: str | None = None, version: int = 2) -> None:
         """Kill a specific player on the server.
 
         Parameters
@@ -675,17 +839,20 @@ class RconCommands(ABC):
             server or already dead, this will return `False`.
 
         """
-        await self.execute(
-            "PunishPlayer",
-            2,
-            {
-                "PlayerId": player_id,
-                "Reason": message,
-            },
-        )
+        if version == 2:
+            await self.execute(
+                "PunishPlayer",
+                version,
+                {
+                    "PlayerId": player_id,
+                    "Reason": message,
+                },
+            )
+        else:
+            await self.execute("punish", version, f"{player_id} {message or ''}")
 
     @cast_response_to_bool({400})
-    async def kick_player(self, player_id: str, message: str) -> None:
+    async def kick_player(self, player_id: str, message: str, version: int = 2) -> None:
         """Kick a specific player from the server.
 
         Parameters
@@ -702,14 +869,17 @@ class RconCommands(ABC):
             server, this will return `False`.
 
         """
-        await self.execute(
-            "KickPlayer",
-            2,
-            {
-                "PlayerId": player_id,
-                "Reason": message,
-            },
-        )
+        if version == 2:
+            await self.execute(
+                "KickPlayer",
+                version,
+                {
+                    "PlayerId": player_id,
+                    "Reason": message,
+                },
+            )
+        else:
+            await self.execute("kick", version, f"{player_id} {message}")
 
     async def ban_player(
         self,
@@ -717,6 +887,7 @@ class RconCommands(ABC):
         reason: str,
         admin_name: str,
         duration_hours: int | None = None,
+        version: int = 2
     ) -> None:
         """Ban a specific player from the server.
 
@@ -733,36 +904,42 @@ class RconCommands(ABC):
             banned. Defaults to `None`.
 
         """
-        if duration_hours:
-            await self.execute(
-                "TemporaryBanPlayer",
-                2,
-                {
-                    "PlayerId": player_id,
-                    "Duration": duration_hours,
-                    "Reason": reason,
-                    "AdminName": admin_name,
-                },
-            )
+        if version == 2:
+            if duration_hours:
+                await self.execute(
+                    "TemporaryBanPlayer",
+                    version,
+                    {
+                        "PlayerId": player_id,
+                        "Duration": duration_hours,
+                        "Reason": reason,
+                        "AdminName": admin_name,
+                    },
+                )
+            else:
+                await self.execute(
+                    "PermanentBanPlayer",
+                    version,
+                    {
+                        "PlayerId": player_id,
+                        "Reason": reason,
+                        "AdminName": admin_name,
+                    },
+                )
         else:
-            await self.execute(
-                "PermanentBanPlayer",
-                2,
-                {
-                    "PlayerId": player_id,
-                    "Reason": reason,
-                    "AdminName": admin_name,
-                },
-            )
+            if duration_hours:
+                await self.execute("tempban", version, f"{player_id} {duration_hours} {reason} {admin_name}")
+            else:
+                await self.execute("permaban", version, f"{player_id} {reason} {admin_name}")
 
     @cast_response_to_bool({400})
-    async def remove_temporary_ban(self, player_id: str) -> None:
-        """Remove a temporary ban for a specific player.
+    async def remove_temporary_ban(self, player_id: str, version: int = 2) -> None:
+        """Remove a temporary ban from a player.
 
         Parameters
         ----------
         player_id : str
-            The ID of the player to remove the temporary ban for.
+            The ID of the player to remove the temporary ban from.
 
         Returns
         -------
@@ -771,22 +948,25 @@ class RconCommands(ABC):
             temporarily banned, this will return `False`.
 
         """
-        await self.execute(
-            "RemoveTemporaryBan",
-            2,
-            {
-                "PlayerId": player_id,
-            },
-        )
+        if version == 2:
+            await self.execute(
+                "RemoveTemporaryBan",
+                version,
+                {
+                    "PlayerId": player_id,
+                },
+            )
+        else:
+            await self.execute("pardontempban", version, player_id)
 
     @cast_response_to_bool({400})
-    async def remove_permanent_ban(self, player_id: str) -> None:
-        """Remove a permanent ban for a specific player.
+    async def remove_permanent_ban(self, player_id: str, version: int = 2) -> None:
+        """Remove a permanent ban from a player.
 
         Parameters
         ----------
         player_id : str
-            The ID of the player to remove the permanent ban for.
+            The ID of the player to remove the permanent ban from.
 
         Returns
         -------
@@ -795,312 +975,179 @@ class RconCommands(ABC):
             permanently banned, this will return `False`.
 
         """
-        await self.execute(
-            "RemovePermanentBan",
-            2,
-            {
-                "PlayerId": player_id,
-            },
-        )
+        if version == 2:
+            await self.execute(
+                "RemovePermanentBan",
+                version,
+                {
+                    "PlayerId": player_id,
+                },
+            )
+        else:
+            await self.execute("pardonpermaban", version, player_id)
 
-    async def unban_player(self, player_id: str) -> bool:
-        """Remove any temporary or permanent ban for a specific player.
+    async def set_auto_balance(self, enabled: bool, version: int = 2) -> None:
+        if version == 2:
+            await self.execute(
+                "SetAutoBalance",
+                version,
+                {
+                    "EnableAutoBalance": enabled,
+                },
+            )
+        else:
+            await self.execute("setautobalanceenabled", version, "on" if enabled else "off")
 
-        This is equivalent to calling both `remove_temporary_ban` and
-        `remove_permanent_ban` for the player.
+    async def set_auto_balance_threshold(self, player_threshold: int, version: int = 2) -> None:
+        if version == 2:
+            await self.execute(
+                "SetAutoBalanceThreshold",
+                version,
+                {
+                    "AutoBalanceThreshold": player_threshold,
+                },
+            )
+        else:
+            await self.execute("setautobalancethreshold", version, str(player_threshold))
 
-        Parameters
-        ----------
-        player_id : str
-            The ID of the player to remove the ban for.
+    async def set_vote_kick(self, enabled: bool, version: int = 2) -> None:
+        if version == 2:
+            await self.execute(
+                "SetVoteKick",
+                version,
+                {
+                    "Enabled": enabled,
+                },
+            )
+        else:
+            await self.execute("setvotekickenabled", version, "on" if enabled else "off")
 
-        Returns
-        -------
-        bool
-            Whether the player was successfully unbanned. If the player is not
-            banned, this will return `False`.
+    async def reset_vote_kick_threshold(self, version: int = 2) -> None:
+        if version == 2:
+            await self.execute("ResetKickThreshold", version)
+        else:
+            await self.execute("resetvotekickthreshold", version)
 
-        """
-        responses = await asyncio.gather(
-            self.remove_temporary_ban(player_id),
-            self.remove_permanent_ban(player_id),
-        )
-        return any(responses)
+    async def set_vote_kick_threshold(self, thresholds: list[tuple[int, int]], version: int = 2) -> None:
+        if version == 2:
+            await self.execute(
+                "SetVoteKickThreshold",
+                version,
+                {
+                    "ThresholdValue": ",".join([f"{p},{v}" for p, v in thresholds]),
+                },
+            )
+        else:
+            raise NotImplementedError("v1 not supported for this method")
 
-    async def set_auto_balance_enabled(self, *, enabled: bool) -> None:
-        """Enable or disable team balancing.
+    async def add_banned_words(self, words: list[str], version: int = 2) -> None:
+        if version == 2:
+            await self.execute(
+                "AddBannedWords",
+                version,
+                {
+                    "BannedWords": ",".join(words),
+                },
+            )
+        else:
+            await self.execute("addprofanity", version, " ".join(words))
 
-        When enabled, the server will prevent players from joining a team when
-        it has significantly more players than the other team. This treshold is
-        configurable with `set_auto_balance_threshold`.
+    async def remove_banned_words(self, words: list[str], version: int = 2) -> None:
+        if version == 2:
+            await self.execute(
+                "RemoveBannedWords",
+                version,
+                {
+                    "BannedWords": ",".join(words),
+                },
+            )
+        else:
+            await self.execute("removeprofanity", version, " ".join(words))
 
-        Parameters
-        ----------
-        enabled : bool
-            Whether to enable or disable auto balancing.
+    async def add_vip_player(self, player_id: str, description: str, version: int = 2) -> None:
+        if version == 2:
+            await self.execute(
+                "AddVipPlayer",
+                version,
+                {
+                    "PlayerId": player_id,
+                    "Description": description,
+                },
+            )
+        else:
+            await self.execute("vipadd", version, f"{player_id} {description}")
 
-        """
-        await self.execute(
-            "SetAutoBalance",
-            2,
-            {
-                "EnableAutoBalance": enabled,
-            },
-        )
+    async def remove_vip_player(self, player_id: str, version: int = 2) -> None:
+        if version == 2:
+            await self.execute(
+                "RemoveVipPlayer",
+                version,
+                {
+                    "PlayerId": player_id,
+                },
+            )
+        else:
+            await self.execute("vipdel", version, player_id)
 
-    async def set_auto_balance_threshold(self, player_threshold: int) -> None:
-        """Set the player threshold for auto balancing.
+    async def set_match_timer(self, game_mode: GameMode, minutes: int, version: int = 2) -> None:
+        if version == 2:
+            await self.execute(
+                "SetMatchTimer",
+                version,
+                {
+                    "GameMode": game_mode,
+                    "MatchLength": minutes,
+                },
+            )
+        else:
+            raise NotImplementedError("v1 not supported for this method")
 
-        For example, with a threshold of 2, a player is only allowed to join a team if
-        after joining it would have at most 2 more players than the other team.
+    async def remove_match_timer(self, game_mode: GameMode, version: int = 2) -> None:
+        if version == 2:
+            await self.execute(
+                "RemoveMatchTimer",
+                version,
+                {
+                    "GameMode": game_mode,
+                },
+            )
+        else:
+            raise NotImplementedError("v1 not supported for this method")
 
-        Setting the threshold to 0 will NOT disable auto balancing! For that purpose,
-        use `set_auto_balance_enabled` instead.
+    async def set_warmup_timer(self, game_mode: GameMode, minutes: int, version: int = 2) -> None:
+        if version == 2:
+            await self.execute(
+                "SetWarmupTimer",
+                version,
+                {
+                    "GameMode": game_mode,
+                    "WarmupLength": minutes,
+                },
+            )
+        else:
+            raise NotImplementedError("v1 not supported for this method")
 
-        Parameters
-        ----------
-        player_threshold : int
-            The number of players that can be more on one team than the other.
-            Must be a non-negative integer.
+    async def remove_warmup_timer(self, game_mode: GameMode, version: int = 2) -> None:
+        if version == 2:
+            await self.execute(
+                "RemoveWarmupTimer",
+                version,
+                {
+                    "GameMode": game_mode,
+                },
+            )
+        else:
+            raise NotImplementedError("v1 not supported for this method")
 
-        """
-        await self.execute(
-            "SetAutoBalanceThreshold",
-            2,
-            {
-                "AutoBalanceThreshold": player_threshold,
-            },
-        )
-
-    async def set_vote_kick_enabled(self, *, enabled: bool) -> None:
-        """Enable or disable vote kicking.
-
-        Parameters
-        ----------
-        enabled : bool
-            Whether to enable or disable vote kicking.
-
-        """
-        await self.execute(
-            "SetVoteKick",
-            2,
-            {
-                "Enabled": enabled,
-            },
-        )
-
-    async def reset_vote_kick_thresholds(self) -> None:
-        """Reset the vote kick thresholds to the default values."""
-        await self.execute("ResetKickThreshold", 2)
-
-    async def set_vote_kick_thresholds(self, thresholds: list[tuple[int, int]]) -> None:
-        """Set the vote kick thresholds for different player counts.
-
-        The thresholds are a list of tuples, where each tuple contains the number of
-        players and the number of votes required to kick a player. For example, a
-        threshold of (5, 3) means that if there are 5 players on the server, 3 votes
-        are required to kick a player.
-
-        Parameters
-        ----------
-        thresholds : list[tuple[int, int]]
-            A list of tuples containing the player count and the number of votes
-            required to kick a player.
-
-        """
-        await self.execute(
-            "SetVoteKickThreshold",
-            2,
-            {
-                "ThresholdValue": ",".join([f"{p},{v}" for p, v in thresholds]),
-            },
-        )
-
-    async def add_banned_words(self, words: list[str]) -> None:
-        """Add words to the list of banned words on the server.
-
-        Banned works will be replaced with asterisks when sent in chat.
-
-        Parameters
-        ----------
-        words : list[str]
-            A list of words or phrases to add to the list of banned words.
-
-        """
-        await self.execute(
-            "AddBannedWords",
-            2,
-            {
-                "Words": ",".join(words),
-            },
-        )
-
-    async def remove_banned_words(self, words: list[str]) -> None:
-        """Remove words from the list of banned words on the server.
-
-        Parameters
-        ----------
-        words : list[str]
-            A list of words or phrases to remove from the list of banned words.
-
-        """
-        await self.execute(
-            "RemoveBannedWords",
-            2,
-            {
-                "Words": ",".join(words),
-            },
-        )
-
-    async def add_vip(self, player_id: str, description: str) -> None:
-        """Add a player to the VIP list.
-
-        Parameters
-        ----------
-        player_id : str
-            The ID of the player to add as a VIP.
-        description : str
-            A description of the VIP. This is usually the name of the player.
-
-        """
-        await self.execute(
-            "AddVipPlayer",
-            2,
-            {
-                "PlayerId": player_id,
-                "Description": description,
-            },
-        )
-
-    async def remove_vip(self, player_id: str) -> None:
-        """Remove a player from the VIP list.
-
-        Parameters
-        ----------
-        player_id : str
-            The ID of the player to remove from the VIP list.
-
-        """
-        await self.execute(
-            "RemoveVipPlayer",
-            2,
-            {
-                "PlayerId": player_id,
-            },
-        )
-
-    async def set_match_timer(self, game_mode: GameMode, minutes: int) -> None:
-        """Set the match timer for a specific game mode.
-
-        This does not affect the current match, but will apply to all future matches
-        of the specified game mode. Limits apply, depending on the game mode.
-
-        Parameters
-        ----------
-        game_mode : GameMode
-            The game mode to set the match timer for. One of "Warfare", "Offensive",
-            or "Skirmish".
-        minutes : int
-            The number of minutes to set the match timer to.
-
-        """
-        await self.execute(
-            "SetMatchTimer",
-            2,
-            {
-                "GameMode": game_mode,
-                "MatchLength": minutes,
-            },
-        )
-
-    async def reset_match_timer(self, game_mode: GameMode) -> None:
-        """Reset the match timer for a specific game mode.
-
-        This does not affect the current match, but will apply to all future matches
-        of the specified game mode. The match timer will be set to the default value.
-
-        Parameters
-        ----------
-        game_mode : GameMode
-            The game mode to reset the match timer for. One of "Warfare", "Offensive",
-            or "Skirmish".
-
-        """
-        await self.execute(
-            "RemoveMatchTimer",
-            2,
-            {
-                "GameMode": game_mode,
-            },
-        )
-
-    async def set_warmup_timer(self, game_mode: GameMode, minutes: int) -> None:
-        """Set the warmup timer for a specific game mode.
-
-        This does not affect the current match, but will apply to all future matches
-        of the specified game mode. Limits apply, depending on the game mode.
-
-        Parameters
-        ----------
-        game_mode : GameMode
-            The game mode to set the warmup timer for. One of "Warfare", "Offensive",
-            or "Skirmish".
-        minutes : int
-            The number of minutes to set the warmup timer to.
-
-        """
-        await self.execute(
-            "SetWarmupTimer",
-            2,
-            {
-                "GameMode": game_mode,
-                "WarmupLength": minutes,
-            },
-        )
-
-    async def remove_warmup_timer(self, game_mode: GameMode) -> None:
-        """Reset the warmup timer for a specific game mode.
-
-        This does not affect the current match, but will apply to all future matches
-        of the specified game mode. The warmup timer will be set to the default value.
-
-        Parameters
-        ----------
-        game_mode : GameMode
-            The game mode to reset the warmup timer for. One of "Warfare", "Offensive",
-            or "Skirmish".
-
-        """
-        await self.execute(
-            "RemoveWarmupTimer",
-            2,
-            {
-                "GameMode": game_mode,
-            },
-        )
-
-    async def set_dynamic_weather_enabled(self, map_id: str, *, enabled: bool) -> None:
-        """Enable or disable dynamic weather for a specific map.
-
-        Not all maps have dynamic weather. Maps that do not support dynamic weather
-        will ignore this command.
-
-        This does not affect the current match, but will apply to all future
-        matches on the specified map.
-
-        Parameters
-        ----------
-        map_id : str
-            The ID of the map to enable or disable dynamic weather for.
-        enabled : bool
-            Whether to enable or disable dynamic weather for the map.
-
-        """
-        await self.execute(
-            "SetMapWeatherToggle",
-            2,
-            {
-                "MapId": map_id,
-                "Enable": enabled,
-            },
-        )
+    async def set_dynamic_weather_toggle(self, map_id: str, enable: bool, version: int = 2) -> None:
+        if version == 2:
+            await self.execute(
+                "SetMapWeatherToggle",
+                version,
+                {
+                    "MapId": map_id,
+                    "Enable": enable,
+                },
+            )
+        else:
+            raise NotImplementedError("v1 not supported for this method")
