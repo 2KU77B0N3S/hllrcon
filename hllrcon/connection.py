@@ -10,7 +10,6 @@ from hllrcon.protocol.protocol import RconProtocol
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-
 class RconConnection(RconCommands):
     """A class representing a connection to an RCON server.
 
@@ -99,11 +98,18 @@ class RconConnection(RconCommands):
     async def execute(
         self,
         command: str,
-        version: int,
+        version: int = 1,
         body: str | dict[str, Any] = "",
     ) -> str:
         if self._disconnect_event.is_set():
             raise HLLConnectionLostError
-        response = await self._protocol.execute(command, version, body)
+        if version != 1:
+            raise ValueError("RconConnection supports only RCON v1")
+        if body:
+            if isinstance(body, str):
+                command += " " + body
+            else:
+                raise ValueError("Body for v1 must be str or empty; dict not supported")
+        response = await self._protocol.execute(command)
         response.raise_for_status()
         return response.content_body
