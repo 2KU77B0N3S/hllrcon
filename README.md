@@ -60,20 +60,30 @@ async def main():
         password="your_rcon_password",
     )
 
-    # Send commands. The client will (re)connect for you.
-    await rcon.broadcast("Hello, HLL!")
-    await rcon.change_map(layers.STALINGRAD_WARFARE_DAY)
-    players = await rcon.get_players()
+    # Send commands. The client will (re)connect for you. Use version=2 for RCON v2.
+    await rcon.broadcast("Hello, HLL!", version=2)
+    await rcon.change_map(layers.STALINGRAD_WARFARE_DAY, version=2)
+    players = await rcon.get_players(version=2)
+    print(players)  # Structured list of players
+
+    # Example: Get detailed info including position for a player
+    if players:
+        first_player_id = players[0]['iD']
+        player_info = await rcon.get_player(first_player_id, version=2)
+        print(f"Player {first_player_id} position: {player_info.world_position}")
+
+    # Get logs (e.g., for kills)
+    logs = await rcon.get_admin_log(60, filter_="KILL", version=2)
+    print(logs)
 
     # Close the connection
     rcon.disconnect()
-
 
     # Alternatively, use the context manager interface to avoid
     # having to manually disconnect.
     async with rcon.connect():
         assert rcon.is_connected() is True
-        await rcon.broadcast("Hello, HLL!")
+        await rcon.broadcast("Hello, HLL!", version=2)
 
 
 if __name__ == '__main__':
